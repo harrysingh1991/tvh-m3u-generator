@@ -4,6 +4,9 @@ import logging
 import requests
 from flask import Flask, Response, render_template_string
 import re
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -127,6 +130,18 @@ def playlist():
     logging.info(f"Generated combined playlist for {len(tags)} tags")
 
     return Response(combined_playlist, mimetype="application/x-mpegurl")
+
+@app.route("/epg.xml")
+def epg():
+    try:
+        epg_url = url_with_auth("/xmltv/channels")
+        logging.info(f"Proxying EPG from: {epg_url}")
+        resp = requests.get(epg_url)
+        resp.raise_for_status()
+        return Response(resp.content, mimetype="application/xml")
+    except Exception as e:
+        logging.error(f"Failed to fetch EPG XML: {e}")
+        return f"Failed to fetch EPG XML: {e}", 500
 
 if __name__ == "__main__":
     logging.info(f"Starting TVHeadend Playlist Server on port {SERVER_PORT}")
