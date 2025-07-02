@@ -12,7 +12,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the entire app code
 COPY . .
 
-EXPOSE 9985
-
 # Run the app
 CMD ["python", "generate_m3u.py"]
