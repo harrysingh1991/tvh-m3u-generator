@@ -15,4 +15,4 @@ COPY . .
 EXPOSE 9985
 
 # Run the app
-CMD ["python", "your_script_name.py"]
+CMD ["python", "generate_m3u.py"]
