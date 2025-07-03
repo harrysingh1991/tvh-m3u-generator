@@ -6,7 +6,7 @@ The script will do the following:
 - Download all the tags set up on the TVH server
 - Download a channel list for each tag, using the user credential provided in TVH_PERSISTENT_PASS (this can result in empty lists depending on user access)
 - Combine all the lists (empty lists are ignored)
-- Add a Group-Title m3u tag, based on the tag name
+- Add a Group-Title TVG tag, based on the tag name
 - Add persistent key into the stream URLs
 - EPG proxied
 
