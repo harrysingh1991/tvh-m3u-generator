@@ -12,7 +12,7 @@ The script will do the following:
 
 A list is generated after the first time the playlist URL is called.
 
-The playlist and epg are accessible via a web server available via the machine's IP. The list can be accessed via a local dns name or proxy.
+The playlist and epg are accessible from a web server available via the machine's IP. The URL's also automatically change is the web server is accessed by a local dns name or proxy.
 
 Docker Compose Example:
 
