@@ -1,5 +1,5 @@
 # tvh-m3u-genarator
-Generate an M3U Playlist from TVHeadend Server, for a user based on tags access.
+Generate an M3U Playlist from TVHeadend Server, for a user based on tags access. This is intended for tvheadend channel lists being formatted better for IPTV players e.g. tivimate
 
 The script will do the following:
 
@@ -7,6 +7,8 @@ The script will do the following:
 - Download a channel list for each tag, using the user credential provided in TVH_PERSISTENT_PASS (this can result in empty lists depending on user access)
 - Combine all the lists (empty lists are ignored)
 - Add a Group-Title HLS tag, based on the tag name
+- Add persistent key into the stream URLs
+- EPG proxied
 
 A list is generated after the first time the playlist URL is called.
 
