@@ -1,5 +1,16 @@
 # tvh-m3u-genarator
-Generate M3U Playlist from TVHeadend Server based on tags
+Generate an M3U Playlist from TVHeadend Server, for a user based on tags access.
+
+The script will do the following:
+
+- Download all the tags set up on the TVH server
+- Download a channel list for each tag, using the user credential provided in TVH_PERSISTENT_PASS (this can result in empty lists depending on user access)
+- Combine all the lists (empty lists are ignored)
+- Add a Group-Title HLS tag, based on the tag name
+
+A list is generated after the first time the playlist URL is called.
+
+The playlist and epg are accessible via a web server available via the machine's IP. The list can be accessed via a local dns name or proxy.
 
 Docker Compose Example:
 
@@ -17,3 +28,9 @@ services:
       REFRESH_INTERVAL: "600" # Refresh interval in seconds
       SERVER_PORT: "9985" #Port for m3u and epg xml to be available from
 ```
+
+### Planned Improvements:
+
+Create channel list when container is started and cache it
+Return a cached list upon every request
+List to update depending on refresh interval. The script currently has a refresh interval and caches the list, but does nothing with that
