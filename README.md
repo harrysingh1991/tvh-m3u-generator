@@ -33,6 +33,8 @@ services:
 
 ### Planned Improvements:
 
-Create channel list when container is started and cache it
-Return a cached list upon every request
-List to update depending on refresh interval. The script currently has a refresh interval and caches the list, but does nothing with that
+In no particular order:
+
+1. Create channel list when container is started and cache it
+2. Return a cached list upon every request
+3. List to update depending on refresh interval. The script currently has a refresh interval and caches the list, but does nothing with that
