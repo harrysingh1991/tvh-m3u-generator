@@ -4,11 +4,12 @@ Generate an M3U Playlist from TVHeadend Server, for a user based on tags access.
 The script will do the following:
 
 - Download all the tags set up on the TVH server
-- Download a channel list for each tag, using the user credential provided in TVH_PERSISTENT_PASS (this can result in empty lists depending on user access)
+- Download a channel list for each user and then each accessible tag, using the user credential provided in TVH_USERS (this can result in empty lists depending on user access). Multiple users can be provided, sperated by a comma.
 - Combine all the lists (empty lists are ignored)
 - Add a Group-Title TVG tag, based on the tag name
 - Add persistent key into the stream URLs
 - EPG proxied
+- default system streaming profile removed from URLs, which are automatically added when downloading channel lists
 
 A list is generated after the first time the playlist URL is called.
 
@@ -26,9 +27,9 @@ services:
     environment:
       TVH_HOST: "Enter TVH Server or Proxy"
       TVH_PORT: "9981" # TVH Port
-      TVH_PERSISTENT_PASS: "PASSWORD" # Use Persistent Password
       REFRESH_INTERVAL: "600" # Refresh interval in seconds
       SERVER_PORT: "9985" #Port for m3u and epg xml to be available from
+      TVH_USERS: "username:persistentpasswordhere,username2:password2"
 ```
 
 ### Planned Improvements:
