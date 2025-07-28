@@ -5,11 +5,11 @@ The script will do the following:
 
 - Download all the tags set up on the TVH server
 - Download a channel list for each user and then each accessible tag, using the user credential provided in TVH_USERS (this can result in empty lists depending on user access). Multiple users can be provided, sperated by a comma.
-- Combine all the lists (empty lists are ignored)
+- Combine all the lists
 - Add a Group-Title TVG tag, based on the tag name
 - Add persistent key into the stream URLs
 - EPG proxied
-- default system streaming profile removed from URLs, which are automatically added when downloading channel lists
+- Default system streaming profile removed from URLs, which are automatically added when downloading channel lists. TVH will choose streaming profile based on server setup/user access
 
 A list is generated after the first time the playlist URL is called.
 
@@ -39,3 +39,4 @@ In no particular order:
 1. Create channel list when container is started and cache it
 2. Return a cached list upon every request
 3. List to update depending on refresh interval. The script currently has a refresh interval and caches the list, but does nothing with that
+4. Empty lists insert an EXTM£U tag. Find a way to ignore empty tag lists
