@@ -19,6 +19,8 @@ TVH_PORT = int(os.getenv("TVH_PORT", 9981))   # TVHeadend server port
 REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", 600))  # Playlist cache duration in seconds
 SERVER_PORT = int(os.getenv("SERVER_PORT", 9987))  # Flask server port
 USER_CREDENTIALS = os.getenv("TVH_USERS", "")  # Format: user1:pass1,user2:pass2,...
+TVH_EPG_AUTH = os.getenv("TVH_EPG_AUTH") #persistent password for epg retrieval
+
 
 # Construct base URL for all TVH requests
 base_url = f"http://{TVH_HOST}:{TVH_PORT}"
@@ -173,10 +175,12 @@ def playlist():
 @app.route("/epg.xml")
 def epg():
     try:
-        if not USERS:
-            raise Exception("No TVH_USERS defined.")
-        epg_url = url_with_auth("/xmltv/channels", USERS[0]["pass"])
-        logging.info(f"Proxying EPG from: {epg_url}")
+        if not TVH_EPG_AUTH:
+            raise Exception("TVH_EPG_AUTH is not set.")
+
+        # Append the persistent password to get the full EPG
+        epg_url = f"http://{TVH_HOST}:{TVH_PORT}/xmltv/channels?auth={TVH_EPG_AUTH}"
+        logging.info(f"Proxying full EPG from: {epg_url}")
         resp = requests.get(epg_url)
         resp.raise_for_status()
         return Response(resp.content, mimetype="application/xml")
