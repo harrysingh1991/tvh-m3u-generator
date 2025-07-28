@@ -9,6 +9,7 @@ The script will do the following:
 - Add a Group-Title TVG tag, based on the tag name
 - Add persistent key into the stream URLs
 - EPG proxied
+- EPG retreived using persistent password in its own variable. to allow for EPG retrieval using an account with higher access than user accounts being used for channel list creation 
 - Default system streaming profile removed from URLs, which are automatically added when downloading channel lists. TVH will choose streaming profile based on server setup/user access
 
 A list is generated after the first time the playlist URL is called.
@@ -30,6 +31,7 @@ services:
       REFRESH_INTERVAL: "600" # Refresh interval in seconds
       SERVER_PORT: "9985" #Port for m3u and epg xml to be available from
       TVH_USERS: "username:persistentpasswordhere,username2:password2"
+      TVH_EPG_AUTH: "persistentpassword"
 ```
 
 ### Planned Improvements:
