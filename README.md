@@ -11,6 +11,7 @@ The script will do the following:
 - EPG proxied
 - EPG retreived using persistent password in its own variable. to allow for EPG retrieval using an account with higher access than user accounts being used for channel list creation 
 - Default system streaming profile removed from URLs, which are automatically added when downloading channel lists. TVH will choose streaming profile based on server setup/user access
+- tvg-logo url retrieved from TVHeadend Server will be appended with TVH_EPG_AUTH persistent password
 
 A list is generated after the first time the playlist URL is called.
 
