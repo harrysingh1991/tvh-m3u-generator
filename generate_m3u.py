@@ -19,8 +19,7 @@ TVH_PORT = int(os.getenv("TVH_PORT", 9981))   # TVHeadend server port
 REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", 600))  # Playlist cache duration in seconds
 SERVER_PORT = int(os.getenv("SERVER_PORT", 9987))  # Flask server port
 USER_CREDENTIALS = os.getenv("TVH_USERS", "")  # Format: user1:pass1,user2:pass2,...
-TVH_EPG_AUTH = os.getenv("TVH_EPG_AUTH") #persistent password for epg retrieval
-
+TVH_EPG_AUTH = os.getenv("TVH_EPG_AUTH")  # persistent password for epg retrieval
 
 # Construct base URL for all TVH requests
 base_url = f"http://{TVH_HOST}:{TVH_PORT}"
@@ -110,6 +109,28 @@ def inject_group_titles_and_auth(m3u_text, group_name, user_pass):
             updated_lines.append(line)
     return '\n'.join(updated_lines) + "\n"
 
+# Append auth token to tvg-logo URLs in the M3U playlist
+def append_auth_to_tvg_logo(m3u_text, auth_token):
+    def repl(match):
+        url = match.group(1)
+        parsed = urllib.parse.urlparse(url)
+        query = urllib.parse.parse_qs(parsed.query)
+        if "auth" not in query:
+            query["auth"] = [auth_token]
+        new_query = urllib.parse.urlencode(query, doseq=True)
+        new_url = urllib.parse.urlunparse((
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            new_query,
+            parsed.fragment,
+        ))
+        return f'tvg-logo="{new_url}"'
+
+    pattern = r'tvg-logo="([^"]+)"'
+    return re.sub(pattern, repl, m3u_text)
+
 # Main index page showing download links and info
 @app.route("/")
 def index():
@@ -164,6 +185,10 @@ def playlist():
                 logging.error(f"Failed to fetch tag {tag_id} for user {user['user']}: {e}")
                 combined_playlist += f"# Failed tag {tag_id} for user {user['user']}: {e}\n"
 
+    # Append auth to all tvg-logo URLs for all channels in the combined playlist
+    if TVH_EPG_AUTH:
+        combined_playlist = append_auth_to_tvg_logo(combined_playlist, TVH_EPG_AUTH)
+
     # Update cache
     cached_playlist = combined_playlist
     last_refresh_time = current_time
@@ -171,7 +196,7 @@ def playlist():
 
     return Response(combined_playlist, mimetype="application/x-mpegurl")
 
-# EPG endpoint — proxies XMLTV from TVHeadend using the first user
+# EPG endpoint — proxies XMLTV from TVHeadend using the persistent EPG auth user
 @app.route("/epg.xml")
 def epg():
     try:
