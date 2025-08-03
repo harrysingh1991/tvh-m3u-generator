@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 import os
 import time
 import logging
@@ -7,12 +10,14 @@ import re
 from dotenv import load_dotenv
 import urllib.parse
 import datetime
+from flask_socketio import SocketIO, emit
 
 # Load environment variables from a .env file (if present)
 load_dotenv()
 
-# Initialize Flask app
+# Initialize Flask app and SocketIO
 app = Flask(__name__)
+socketio = SocketIO(app)
 
 # Read required environment variables with defaults
 TVH_HOST = os.getenv("TVH_HOST", "127.0.0.1")  # TVHeadend server IP
@@ -136,11 +141,9 @@ def append_auth_to_tvg_logo(m3u_text, auth_token):
 @app.route("/refresh")
 def refresh():
     global cached_playlist, last_refresh_time
-    # Force cache update by resetting last_refresh_time
     last_refresh_time = 0
-    # Optionally, trigger a refresh immediately
-    # Call the playlist function to update cache
     playlist()
+    socketio.emit('playlist_updated')
     logging.info("Playlist cache manually refreshed")
     return redirect(url_for('index'))
 
@@ -161,18 +164,29 @@ def parse_m3u_channels(m3u_text):
             channel_name = line.split(",", 1)[-1].strip()
             # Next line should be the stream URL
             stream_url = lines[i+1] if i+1 < len(lines) else ""
+            # Extract channelid from stream_url
+            channelid_match = re.search(r'/channelid/(\d+)', stream_url)
+            channelid = channelid_match.group(1) if channelid_match else ""
             channels.append({
                 "group_title": group_title.group(1) if group_title else "",
                 "channel_name": channel_name,
                 "channel_number": channel_number.group(1) if channel_number else "",
                 "tvg_id": tvg_id.group(1) if tvg_id else "",
                 "tvg_logo": tvg_logo.group(1) if tvg_logo else "",
+                "channelid": channelid,
                 "stream_url": stream_url,
             })
             i += 2
         else:
             i += 1
     return channels
+
+# Track server start time for restart detection
+SERVER_START_TIME = int(time.time())
+
+@app.route("/server_status")
+def server_status():
+    return {"start_time": SERVER_START_TIME}
 
 # Main index page showing download links and info
 @app.route("/")
@@ -182,19 +196,21 @@ def index():
     else:
         last_update_str = "Never"
 
-    # Parse channels from cached playlist
     channel_rows = ""
     if cached_playlist:
         channels = parse_m3u_channels(cached_playlist)
         for ch in channels:
             logo_html = f'<img src="{ch["tvg_logo"]}" alt="logo" style="height:32px;">' if ch["tvg_logo"] else ""
-            play_html = f'<a href="{ch["stream_url"]}" target="_blank">Play</a>'
+            play_html = f'''
+            <button onclick="copyToClipboard('{ch["stream_url"]}')">Copy Link</button>
+            '''
             channel_rows += f"""
             <tr>
                 <td>{ch["group_title"]}</td>
                 <td>{ch["channel_name"]}</td>
                 <td>{ch["channel_number"]}</td>
                 <td>{ch["tvg_id"]}</td>
+                <td>{ch.get("channelid", "")}</td>
                 <td>{logo_html}</td>
                 <td>{play_html}</td>
             </tr>
@@ -283,7 +299,29 @@ def index():
                 background: #fff;
             }}
         </style>
+        <script src="//cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
         <script>
+            var socket = io({{transports: ['websocket']}});
+            socket.on('playlist_updated', function() {{
+                location.reload();
+            }});
+
+            // Add polling for server restart detection
+            let lastServerStart = null;
+            function checkServerRestart() {{
+                fetch('/server_status')
+                    .then(response => response.json())
+                    .then(data => {{
+                        if (lastServerStart === null) {{
+                            lastServerStart = data.start_time;
+                        }} else if (data.start_time !== lastServerStart) {{
+                            location.reload();
+                        }}
+                    }})
+                    .catch(() => {{}});
+            }}
+            setInterval(checkServerRestart, 5000);
+
             function toggleMode() {{
                 document.body.classList.toggle('light-mode');
                 var tables = document.getElementsByTagName('table');
@@ -315,6 +353,21 @@ def index():
                     trs[i].classList.toggle('light-mode');
                 }}
             }}
+
+            function copyToClipboard(url) {{
+                // Create a temporary textarea element
+                var tempInput = document.createElement("textarea");
+                tempInput.value = url;
+                document.body.appendChild(tempInput);
+                tempInput.select();
+                try {{
+                    document.execCommand("copy");
+                    alert("Stream URL copied! Paste it in VLC or your preferred player.");
+                }} catch (err) {{
+                    alert("Failed to copy. Please copy manually.");
+                }}
+                document.body.removeChild(tempInput);
+            }}
         </script>
     </head>
     <body>
@@ -327,7 +380,7 @@ def index():
         <form action="/refresh" method="get">
             <button type="submit">Refresh Channel List Now</button>
         </form>
-        <p>Playlist auto-refresh interval: {REFRESH_INTERVAL} seconds</p>
+        <p>Playlist refresh interval: {REFRESH_INTERVAL} seconds</p>
         <p>Last playlist update: {last_update_str}</p>
         <h2>Channels</h2>
         <table>
@@ -336,6 +389,7 @@ def index():
                 <th>Channel Name</th>
                 <th>Channel Number</th>
                 <th>TVG-ID</th>
+                <th>Channel ID</th>
                 <th>TVG-Logo</th>
                 <th>Play</th>
             </tr>
@@ -413,4 +467,4 @@ def epg():
 # Entry point for the Flask server
 if __name__ == "__main__":
     logging.info(f"Starting TVHeadend Playlist Server on port {SERVER_PORT}")
-    app.run(host="0.0.0.0", port=SERVER_PORT)
+    socketio.run(app, host="0.0.0.0", port=SERVER_PORT)
