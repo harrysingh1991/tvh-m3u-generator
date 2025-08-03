@@ -2,10 +2,11 @@ import os
 import time
 import logging
 import requests
-from flask import Flask, Response
+from flask import Flask, Response, redirect, url_for
 import re
 from dotenv import load_dotenv
 import urllib.parse
+import datetime
 
 # Load environment variables from a .env file (if present)
 load_dotenv()
@@ -131,19 +132,215 @@ def append_auth_to_tvg_logo(m3u_text, auth_token):
     pattern = r'tvg-logo="([^"]+)"'
     return re.sub(pattern, repl, m3u_text)
 
+# Add a manual refresh endpoint
+@app.route("/refresh")
+def refresh():
+    global cached_playlist, last_refresh_time
+    # Force cache update by resetting last_refresh_time
+    last_refresh_time = 0
+    # Optionally, trigger a refresh immediately
+    # Call the playlist function to update cache
+    playlist()
+    logging.info("Playlist cache manually refreshed")
+    return redirect(url_for('index'))
+
+# Parse channels from M3U text
+def parse_m3u_channels(m3u_text):
+    channels = []
+    lines = m3u_text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith("#EXTINF"):
+            # Extract attributes
+            group_title = re.search(r'group-title="([^"]+)"', line)
+            tvg_id = re.search(r'tvg-id="([^"]+)"', line)
+            tvg_logo = re.search(r'tvg-logo="([^"]+)"', line)
+            channel_number = re.search(r'tvg-chno="([^"]+)"', line)
+            # Channel name is after last comma
+            channel_name = line.split(",", 1)[-1].strip()
+            # Next line should be the stream URL
+            stream_url = lines[i+1] if i+1 < len(lines) else ""
+            channels.append({
+                "group_title": group_title.group(1) if group_title else "",
+                "channel_name": channel_name,
+                "channel_number": channel_number.group(1) if channel_number else "",
+                "tvg_id": tvg_id.group(1) if tvg_id else "",
+                "tvg_logo": tvg_logo.group(1) if tvg_logo else "",
+                "stream_url": stream_url,
+            })
+            i += 2
+        else:
+            i += 1
+    return channels
+
 # Main index page showing download links and info
 @app.route("/")
 def index():
+    if last_refresh_time:
+        last_update_str = datetime.datetime.fromtimestamp(last_refresh_time).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        last_update_str = "Never"
+
+    # Parse channels from cached playlist
+    channel_rows = ""
+    if cached_playlist:
+        channels = parse_m3u_channels(cached_playlist)
+        for ch in channels:
+            logo_html = f'<img src="{ch["tvg_logo"]}" alt="logo" style="height:32px;">' if ch["tvg_logo"] else ""
+            play_html = f'<a href="{ch["stream_url"]}" target="_blank">Play</a>'
+            channel_rows += f"""
+            <tr>
+                <td>{ch["group_title"]}</td>
+                <td>{ch["channel_name"]}</td>
+                <td>{ch["channel_number"]}</td>
+                <td>{ch["tvg_id"]}</td>
+                <td>{logo_html}</td>
+                <td>{play_html}</td>
+            </tr>
+            """
+
     html = f"""
     <html>
-    <head><title>TVHeadend Playlist Server</title></head>
+    <head>
+        <title>TVHeadend Playlist Server</title>
+        <style>
+            body {{
+                background-color: #181818;
+                color: #e0e0e0;
+                font-family: Arial, sans-serif;
+                transition: background 0.3s, color 0.3s;
+            }}
+            table {{
+                background-color: #222;
+                color: #e0e0e0;
+                border-collapse: collapse;
+                width: 100%;
+            }}
+            th, td {{
+                border: 1px solid #444;
+                padding: 8px;
+                text-align: left;
+            }}
+            th {{
+                background-color: #333;
+            }}
+            tr:nth-child(even) {{
+                background-color: #202020;
+            }}
+            a, a:visited {{
+                color: #80bfff;
+            }}
+            button {{
+                background-color: #333;
+                color: #e0e0e0;
+                border: 1px solid #444;
+                padding: 8px 16px;
+                border-radius: 4px;
+                cursor: pointer;
+            }}
+            button:hover {{
+                background-color: #444;
+            }}
+            img {{
+                background: #222;
+                border-radius: 4px;
+            }}
+            /* Light mode styles */
+            body.light-mode {{
+                background-color: #f5f5f5;
+                color: #222;
+            }}
+            table.light-mode {{
+                background-color: #fff;
+                color: #222;
+            }}
+            th.light-mode, td.light-mode {{
+                border: 1px solid #ccc;
+            }}
+            th.light-mode {{
+                background-color: #eee;
+            }}
+            tr.light-mode {{
+                background-color: #fff !important;
+                color: #222 !important;
+            }}
+            tr.light-mode:nth-child(even) {{
+                background-color: #f0f0f0 !important;
+            }}
+            a.light-mode, a.light-mode:visited {{
+                color: #0066cc;
+            }}
+            button.light-mode {{
+                background-color: #eee;
+                color: #222;
+                border: 1px solid #ccc;
+            }}
+            button.light-mode:hover {{
+                background-color: #ddd;
+            }}
+            img.light-mode {{
+                background: #fff;
+            }}
+        </style>
+        <script>
+            function toggleMode() {{
+                document.body.classList.toggle('light-mode');
+                var tables = document.getElementsByTagName('table');
+                for (var i = 0; i < tables.length; i++) {{
+                    tables[i].classList.toggle('light-mode');
+                }}
+                var ths = document.getElementsByTagName('th');
+                for (var i = 0; i < ths.length; i++) {{
+                    ths[i].classList.toggle('light-mode');
+                }}
+                var tds = document.getElementsByTagName('td');
+                for (var i = 0; i < tds.length; i++) {{
+                    tds[i].classList.toggle('light-mode');
+                }}
+                var links = document.getElementsByTagName('a');
+                for (var i = 0; i < links.length; i++) {{
+                    links[i].classList.toggle('light-mode');
+                }}
+                var buttons = document.getElementsByTagName('button');
+                for (var i = 0; i < buttons.length; i++) {{
+                    buttons[i].classList.toggle('light-mode');
+                }}
+                var imgs = document.getElementsByTagName('img');
+                for (var i = 0; i < imgs.length; i++) {{
+                    imgs[i].classList.toggle('light-mode');
+                }}
+                var trs = document.getElementsByTagName('tr');
+                for (var i = 0; i < trs.length; i++) {{
+                    trs[i].classList.toggle('light-mode');
+                }}
+            }}
+        </script>
+    </head>
     <body>
         <h1>TVHeadend Playlist Server</h1>
+        <button onclick="toggleMode()">Toggle Dark/Light Mode</button>
         <ul>
             <li><a href="/playlist.m3u">Download M3U Playlist</a></li>
             <li><a href="/epg.xml">Download EPG XML</a></li>
         </ul>
+        <form action="/refresh" method="get">
+            <button type="submit">Refresh Channel List Now</button>
+        </form>
         <p>Playlist auto-refresh interval: {REFRESH_INTERVAL} seconds</p>
+        <p>Last playlist update: {last_update_str}</p>
+        <h2>Channels</h2>
+        <table>
+            <tr>
+                <th>Group Title</th>
+                <th>Channel Name</th>
+                <th>Channel Number</th>
+                <th>TVG-ID</th>
+                <th>TVG-Logo</th>
+                <th>Play</th>
+            </tr>
+            {channel_rows}
+        </table>
     </body>
     </html>
     """
