@@ -33,9 +33,21 @@ base_url = f"http://{TVH_HOST}:{TVH_PORT}"
 # Configure basic logging for visibility
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
+# Print out key configuration parameters for debugging
+print(f"[CONFIG] TVH_HOST: {TVH_HOST}")
+print(f"[CONFIG] TVH_PORT: {TVH_PORT}")
+print(f"[CONFIG] REFRESH_INTERVAL: {REFRESH_INTERVAL}")
+print(f"[CONFIG] SERVER_PORT: {SERVER_PORT}")
+print(f"[CONFIG] TVH_USERS: {USER_CREDENTIALS}")
+print(f"[CONFIG] TVH_EPG_AUTH: {TVH_EPG_AUTH}")
+print(f"[CONFIG] Base URL: {base_url}")
+
 # Global cache for the combined M3U playlist
 cached_playlist = None
 last_refresh_time = 0
+
+# Add this global variable
+last_playlist_update = int(time.time())
 
 # Parse the comma-separated user credentials into a list of dicts
 def parse_users(creds_str):
@@ -144,6 +156,7 @@ def refresh():
     last_refresh_time = 0
     playlist()
     socketio.emit('playlist_updated')
+    socketio.emit('playlist_cache_refreshed')
     logging.info("Playlist cache manually refreshed")
     return redirect(url_for('index'))
 
@@ -186,7 +199,10 @@ SERVER_START_TIME = int(time.time())
 
 @app.route("/server_status")
 def server_status():
-    return {"start_time": SERVER_START_TIME}
+    return {
+        "start_time": SERVER_START_TIME,
+        "last_playlist_update": last_playlist_update
+    }
 
 # Main index page showing download links and info
 @app.route("/")
@@ -308,6 +324,7 @@ def index():
 
             // Add polling for server restart detection
             let lastServerStart = null;
+            let lastPlaylistUpdate = null;
             function checkServerRestart() {{
                 fetch('/server_status')
                     .then(response => response.json())
@@ -317,10 +334,19 @@ def index():
                         }} else if (data.start_time !== lastServerStart) {{
                             location.reload();
                         }}
+                        if (lastPlaylistUpdate === null) {{
+                            lastPlaylistUpdate = data.last_playlist_update;
+                        }} else if (data.last_playlist_update !== lastPlaylistUpdate) {{
+                            location.reload();
+                        }}
                     }})
-                    .catch(() => {{}});
+                    .catch(function(error) {{ /* error ignored */ }});
             }}
             setInterval(checkServerRestart, 5000);
+
+            socket.on('playlist_cache_refreshed', function() {{
+                location.reload();
+            }});
 
             function toggleMode() {{
                 document.body.classList.toggle('light-mode');
@@ -403,7 +429,7 @@ def index():
 # Playlist endpoint that merges all user-visible channels
 @app.route("/playlist.m3u")
 def playlist():
-    global cached_playlist, last_refresh_time
+    global cached_playlist, last_refresh_time, last_playlist_update
     current_time = time.time()
 
     # Serve cached playlist if it is still fresh
@@ -411,8 +437,7 @@ def playlist():
         logging.info("Serving cached playlist")
         return Response(cached_playlist, mimetype="application/x-mpegurl")
 
-    combined_playlist = "#EXTM3U\n"  # M3U header
-
+    combined_playlist = "#EXTM3U\n"
     # Loop through each user and collect channels they can access
     for user in USERS:
         user_pass = user["pass"]
@@ -444,6 +469,10 @@ def playlist():
     cached_playlist = combined_playlist
     last_refresh_time = current_time
     logging.info("Generated updated playlist")
+
+    # Now update timestamp and notify clients
+    last_playlist_update = int(time.time())
+    socketio.emit('playlist_cache_refreshed')
 
     return Response(combined_playlist, mimetype="application/x-mpegurl")
 
