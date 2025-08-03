@@ -1,19 +1,29 @@
 # tvh-m3u-genarator
-Generate an M3U Playlist from TVHeadend Server, for a user based on tags access. This is intended for tvheadend channel lists being formatted better for IPTV players e.g. tivimate
+Generate an M3U Playlist from TVHeadend Server, for a user based on tags access. This container intends to improve the formatting of channel lists for IPTV Players e.g. Tivimate, Smarters.
 
 The script will do the following:
 
-- Download all the tags set up on the TVH server
-- Download a channel list for each user and then each accessible tag, using the user credential provided in TVH_USERS (this can result in empty lists depending on user access). Multiple users can be provided, sperated by a comma.
-- Combine all the lists
+- Download all the tags set up on the TVH server, for the users provided in TVH_USERS. This allows for multiple users to be requested.
+- Download a channel list per tag, for by each user, using the user credential provided in TVH_USERS (this can result in empty lists depending on users not having access to certain tags), and then download the channels from each tag. Multiple users can be provided, sperated by a comma (see example Docker Compose below)
+- Combine all the lists downloaded, for each tag and user combination
+- Downloads will follow the tag order defined in TVHendend Server
 - Add a Group-Title TVG tag, based on the tag name
-- Add persistent key into the stream URLs
+- Add persistent key into the stream URLs (TVH_USERS persistent password)
+- Add persistent key into icons url (TVH_EPG_AUTH, required for local icons)
 - EPG proxied
-- EPG retreived using persistent password in its own variable. to allow for EPG retrieval using an account with higher access than user accounts being used for channel list creation 
-- Default system streaming profile removed from URLs, which are automatically added when downloading channel lists. TVH will choose streaming profile based on server setup/user access
-- tvg-logo url retrieved from TVHeadend Server will be appended with TVH_EPG_AUTH persistent password
+- EPG retreived using persistent password in its own variable (TVH_EPG_AUTH), to allow for EPG retrieval using an account with higher access than user accounts. This is to allow 1 TVH user with epg access to all channels.
+- Default system streaming profile removed from URLs, which are automatically added when downloading channel lists. TVH will choose streaming profile based on server setup/user access.
+- The list is only refreshed after the cache period, when a list is requested. i.e a list could be 4 hours out of date, when when the list URL is requested, it will recognise the list is out of date and generate an updated version.
 
-A list is generated after the first time the playlist URL is called.
+Web view added to do/see the following:
+
+- Provide URL for Channel List and EPG XML files
+- Datetime stamp when cache list was last updated
+- Table showing the channels in the cached list (column for each attribute in the file)
+- Light/Dark for easy viewing of different types of icons
+- Channel List manual refresh button, for use after TVH server changes
+
+IMPORTANT NOTE: A list is generated after the first time the playlist URL is called, and not when the container is started
 
 The playlist and epg are accessible from a web server via the machine's IP. The URL's also automatically change if the web server is accessed by a local dns name or proxy.
 
@@ -39,7 +49,5 @@ services:
 
 In no particular order:
 
-1. Create channel list when container is started and cache it
-2. Return a cached list upon every request
-3. List to update depending on refresh interval. The script currently has a refresh interval and caches the list, but does nothing with that
-4. Empty lists insert an EXTM3U tag. Find a way to ignore empty tag lists
+1. Empty lists insert an EXTM3U tag (users with restricted access to certain tags). Find a way to ignore empty tag lists (looks cleaner)
+2. Add a variable to define is persistent password needs adding to icon url per channel. If icons are retreived from a non-local source, then an auth code probably isn't needed.
