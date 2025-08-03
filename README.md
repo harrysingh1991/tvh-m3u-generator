@@ -1,5 +1,5 @@
 # tvh-m3u-genarator
-Generate an M3U Playlist from TVHeadend Server, for user/s based on tag/s access. This container intends to improve the formatting of channel lists for IPTV Players e.g. Tivimate, Smarters.
+Generate an M3U Playlist from TVHeadend Server, for user/s based on tag/s access. This container intends to improve the formatting of channel lists for IPTV Players e.g. Tivimate, Smarters. A web server will be available offering the urls for an M3U formatted channel list and a proxied url for the epg.xml
 
 The script will do the following:
 
@@ -24,8 +24,6 @@ Web view added to do/see the following:
 - Channel List manual refresh button, for use after TVH server changes and to avoid waiting.
 
 IMPORTANT NOTE: A list is generated after the first time the playlist URL is called, and not when the container is started
-
-The playlist and epg are accessible from a web server via the machine's IP. The URL's also automatically change if the web server is accessed by a local dns name or proxy.
 
 Docker Compose Example:
 
