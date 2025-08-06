@@ -1,19 +1,19 @@
 # tvh-m3u-genarator
-Generate an M3U Playlist from TVHeadend Server, for user/s based on tag/s access. This container intends to improve the formatting of channel lists for IPTV Players e.g. Tivimate, Smarters. A web server will be available offering the urls for an M3U formatted channel list and a proxied url for the epg.xml
+Generate an M3U Playlist from TVHeadend Server, based on user/s and tag/s access. This container intends to improve the formatting of channel lists for IPTV Players e.g. Tivimate, Smarters. A web server will be available offering the urls for an M3U formatted channel list, and a proxied URL for the EPG
 
 The script will do the following:
 
-- Download all the tags set up on the TVH server, for the users provided in TVH_USERS. This allows for multiple users to be requested.
-- Download a channel list, for each tag and user, using the user credential provided in TVH_USERS (this can result in empty lists depending on users not having access to certain tags), and then download each list. Multiple users can be provided, sperated by a comma (see example Docker Compose below)
+- Download all the tags set up on the TVH server
+- Download a channel list, for each user and tag combination, using the user credential provided in TVH_USERS (this can result in empty lists depending on users not having access to certain tags). Multiple users can be provided, seperated by a comma (see example Docker Compose below)
 - Combine all the lists downloaded
 - Downloads will follow the tag order defined in TVHendend Server
 - Add a Group-Title TVG tag, based on the tag name
 - Add persistent key into the stream URLs (TVH_USERS persistent password)
-- Add persistent key into icons url (TVH_EPG_AUTH, required for local icons)
-- EPG proxied
+- Optionally, add persistent password into icons url (TVH_EPG_AUTH, potentially required for local icons) 
+- Proxy EPG
 - EPG retreived using persistent password in its own variable (TVH_EPG_AUTH), to allow for EPG retrieval using an account with higher access than user accounts. This is to allow 1 TVH user with epg access to all channels.
 - System default streaming profile removed from URLs, which are automatically added when downloading channel lists. TVH will thrn choose streaming profile based on server setup/user access when a channel is played.
-- The list is only refreshed after the cache period, when a list is requested. i.e. a list could be 4 hours out of date, and then when the list URL is requested it will recognise the list is out of date, and generate an updated version.
+- Download a list and cache it, when the container is started. A refreshed list will be created once the refresh interval expires
 
 Web view added to do/see the following:
 
@@ -21,9 +21,7 @@ Web view added to do/see the following:
 - Datetime stamp when cache list was last updated
 - Table showing the channels in the cached list (column for each attribute in the file)
 - Light/Dark for easy viewing of different types of icons
-- Channel List manual refresh button, for use after TVH server changes and to avoid waiting.
-
-IMPORTANT NOTE: A list is generated after the first time the playlist URL is called, and not when the container is started
+- Channel List manual refresh button, for use after TVH server changes and to avoid waiting or restarting of the container.
 
 Docker Compose Example:
 
@@ -41,11 +39,9 @@ services:
       SERVER_PORT: "9985" #Port for m3u and epg xml to be available from
       TVH_USERS: "username:persistentpasswordhere,username2:password2"
       TVH_EPG_AUTH: "persistentpassword"
+      #TVH_APPEND_ICON_AUTH: "1" #Optional. set to "1", "yes" or "true"
 ```
 
 ### Planned Improvements:
 
-In no particular order:
-
 1. Empty lists insert an EXTM3U tag (users with restricted access to certain tags). Find a way to ignore empty tag lists (looks cleaner)
-2. Add a variable to define if persistent password needs adding to channel icon url. If icons are retreived from a non-local source, then an auth code probably isn't needed.
