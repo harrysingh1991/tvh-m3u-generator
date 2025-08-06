@@ -30,14 +30,14 @@ Docker Compose Example:
 ```
 services:
   tvh-m3u-generator:
-    image: harminderdhak/tvh-m3u-generator:latest
+    image: harrysingh1991/tvh-m3u-generator:latest
     container_name: tvh-m3u-generator
     ports:
       - "9985:9985"
     environment:
-      TVH_HOST: "Enter TVH Server or Proxy"
+      TVH_HOST: "Enter TVH Server or Proxy" #e.g. 192.168.0.2 
       TVH_PORT: "9981" # TVH Port
-      REFRESH_INTERVAL: "600" # Refresh interval in seconds
+      REFRESH_INTERVAL: "600" #cache timeout in seconds
       SERVER_PORT: "9985" #Port for m3u and epg xml to be available from
       TVH_USERS: "username:persistentpasswordhere,username2:password2"
       TVH_EPG_AUTH: "persistentpassword"
