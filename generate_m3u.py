@@ -1,116 +1,137 @@
+import logging
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+
 import eventlet
 eventlet.monkey_patch()
-
 import os
 import time
-import logging
 import requests
-from flask import Flask, Response, redirect, url_for
+from flask import Flask, Response, redirect, url_for, request, render_template
 import re
-from dotenv import load_dotenv
 import urllib.parse
 import datetime
 from flask_socketio import SocketIO, emit
+from dotenv import load_dotenv
+import threading
 
-# Load environment variables from a .env file (if present)
+# Load environment variables
 load_dotenv()
 
-# Initialize Flask app and SocketIO
+# Consolidated environment variable check
+def check_and_log_env_vars():
+    required_vars = [
+        "TVH_HOST",
+        "TVH_PORT",
+        "REFRESH_INTERVAL",
+        "TVH_USERS",
+        "TVH_EPG_AUTH"
+    ]
+    missing_vars = []
+    for var in required_vars:
+        value = os.getenv(var)
+        if value is None or value == "":
+            logging.error(f"Missing required environment variable: {var}")
+            missing_vars.append(var)
+        else:
+            logging.info(f"ENV CHECK: {var} is set to '{value}'")
+    if missing_vars:
+        logging.error(f"Exiting due to missing environment variables: {', '.join(missing_vars)}")
+        exit(1)
+
+check_and_log_env_vars()
+
+# Read environment variables
+TVH_HOST = os.getenv("TVH_HOST","127.0.0.1")
+TVH_PORT = int(os.getenv("TVH_PORT","9981"))
+REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL","600"))
+USER_CREDENTIALS = os.getenv("TVH_USERS")
+TVH_EPG_AUTH = os.getenv("TVH_EPG_AUTH")
+TVH_APPEND_ICON_AUTH = os.getenv("TVH_APPEND_ICON_AUTH", "0").lower() in ("1", "true", "yes")
+EPG_STRIP_OFFSET = os.getenv("EPG_STRIP_OFFSET", "0").lower() in ("1", "true", "yes")
+
+# Flask app and SocketIO
 app = Flask(__name__)
 socketio = SocketIO(app)
 
-# Read required environment variables with defaults
-TVH_HOST = os.getenv("TVH_HOST", "127.0.0.1")  # TVHeadend server IP
-TVH_PORT = int(os.getenv("TVH_PORT", 9981))   # TVHeadend server port
-REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", 600))  # Playlist cache duration in seconds
-SERVER_PORT = int(os.getenv("SERVER_PORT", 9987))  # Flask server port
-USER_CREDENTIALS = os.getenv("TVH_USERS", "")  # Format: user1:pass1,user2:pass2,...
-TVH_EPG_AUTH = os.getenv("TVH_EPG_AUTH")  # persistent password for epg retrieval
-
-# Construct base URL for all TVH requests
-base_url = f"http://{TVH_HOST}:{TVH_PORT}"
-
-# Configure basic logging for visibility
-logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
-
-# Print out key configuration parameters for debugging
-print(f"[CONFIG] TVH_HOST: {TVH_HOST}")
-print(f"[CONFIG] TVH_PORT: {TVH_PORT}")
-print(f"[CONFIG] REFRESH_INTERVAL: {REFRESH_INTERVAL}")
-print(f"[CONFIG] SERVER_PORT: {SERVER_PORT}")
-print(f"[CONFIG] TVH_USERS: {USER_CREDENTIALS}")
-print(f"[CONFIG] TVH_EPG_AUTH: {TVH_EPG_AUTH}")
-print(f"[CONFIG] Base URL: {base_url}")
-
-# Global cache for the combined M3U playlist
+# Global variables
 cached_playlist = None
 last_refresh_time = 0
-
-# Add this global variable
 last_playlist_update = int(time.time())
+SERVER_START_TIME = int(time.time())
 
-# Parse the comma-separated user credentials into a list of dicts
+# Helper variables and functions
+base_url = f"http://{TVH_HOST}:{TVH_PORT}"
+
 def parse_users(creds_str):
+    logging.info("Parsing user credentials")
     pairs = [u.strip() for u in creds_str.split(",") if ":" in u]
-    return [{"user": u.split(":")[0], "pass": u.split(":")[1]} for u in pairs]
+    users = [{"user": u.split(":")[0], "pass": u.split(":")[1]} for u in pairs]
+    logging.info(f"Parsed users: {[u['user'] for u in users]}")
+    return users
 
-# Load user accounts (TVH persistent users with passwords)
+# Parse user credentials from environment variable
 USERS = parse_users(USER_CREDENTIALS)
 
-# Build a TVHeadend URL with persistent password appended as a query param
 def url_with_auth(path: str, user_pass: str) -> str:
     separator = '&' if '?' in path else '?'
-    return f"{base_url}{path}{separator}auth={user_pass}"
+    url = f"{base_url}{path}{separator}auth={user_pass}"
+    logging.info(f"Generated URL with auth: {url}")
+    return url
 
-# Fetch all available tags (channel groups) visible to a given user
 def fetch_tags(user_pass):
     tags_url = url_with_auth("/playlist/tags", user_pass)
     logging.info(f"Fetching tags from: {tags_url}")
     resp = requests.get(tags_url)
     resp.raise_for_status()
     lines = resp.text.splitlines()
-
     tags = []
     i = 0
-    # Process the M3U format line-by-line to extract tag IDs and names
     while i < len(lines):
         line = lines[i]
         if line.startswith("#EXTINF"):
-            name = line.split(',', 1)[1].strip()  # Extract group name
+            name = line.split(',', 1)[1].strip()
             i += 1
             if i < len(lines):
                 url = lines[i].strip()
                 match = re.search(r'/tagid/(\d+)', url)
                 if match:
                     tag_id = match.group(1)
+                    logging.info(f"Found tag: {tag_id} ({name})")
                     tags.append({"name": name, "tag_id": tag_id})
         i += 1
+    logging.info(f"Total tags fetched: {len(tags)}")
     return tags
 
-# Fetch channels for a specific tag ID; profile omitted to let TVH pick allowed profile
 def fetch_channels_for_tag(tag_id, user_pass):
     path = f"/playlist/tagid/{tag_id}"
     full_url = url_with_auth(path, user_pass)
     logging.info(f"Fetching channels for tag {tag_id} from: {full_url}")
     resp = requests.get(full_url)
     resp.raise_for_status()
+    logging.info(f"Fetched channels for tag {tag_id}, response size: {len(resp.text)} bytes")
     return resp.text
 
-# Inject group-title attribute into #EXTINF lines and append auth token to stream URLs
-def inject_group_titles_and_auth(m3u_text, group_name, user_pass):
+def inject_group_titles(m3u_text, group_name):
+    logging.info(f"Injecting group-title '{group_name}'")
     lines = m3u_text.splitlines()
     updated_lines = []
     for line in lines:
         if line.startswith("#EXTINF"):
             if 'group-title' not in line:
-                # Inject group-title just after the comma in #EXTINF line
                 line = line.replace(",", f' group-title="{group_name}",', 1)
-            updated_lines.append(line)
-        elif line.startswith("http"):
-            # Remove any profile= param and add auth param
+        updated_lines.append(line)
+    logging.info(f"Injected group-title for {group_name}")
+    return '\n'.join(updated_lines) + "\n"
+
+def inject_auth(m3u_text, user_pass):
+    logging.info(f"Injecting auth for user")
+    lines = m3u_text.splitlines()
+    updated_lines = []
+    for line in lines:
+        if line.startswith("http"):
             parsed = urllib.parse.urlparse(line)
             query = urllib.parse.parse_qs(parsed.query)
-            query.pop("profile", None)  # Remove profile param if present
+            query.pop("profile", None)
             if "auth" not in query:
                 query["auth"] = [user_pass]
             new_query = urllib.parse.urlencode(query, doseq=True)
@@ -125,59 +146,51 @@ def inject_group_titles_and_auth(m3u_text, group_name, user_pass):
             updated_lines.append(new_url)
         else:
             updated_lines.append(line)
+    logging.info("Injected auth for user")
     return '\n'.join(updated_lines) + "\n"
 
-# Append auth token to tvg-logo URLs in the M3U playlist
 def append_auth_to_tvg_logo(m3u_text, auth_token):
+    logging.info("Checking if tvg-logo URLs need auth appended")
     def repl(match):
         url = match.group(1)
-        parsed = urllib.parse.urlparse(url)
-        query = urllib.parse.parse_qs(parsed.query)
-        if "auth" not in query:
-            query["auth"] = [auth_token]
-        new_query = urllib.parse.urlencode(query, doseq=True)
-        new_url = urllib.parse.urlunparse((
-            parsed.scheme,
-            parsed.netloc,
-            parsed.path,
-            parsed.params,
-            new_query,
-            parsed.fragment,
-        ))
-        return f'tvg-logo="{new_url}"'
-
+        if TVH_APPEND_ICON_AUTH:
+            parsed = urllib.parse.urlparse(url)
+            query = urllib.parse.parse_qs(parsed.query)
+            if "auth" not in query:
+                query["auth"] = [auth_token]
+            new_query = urllib.parse.urlencode(query, doseq=True)
+            new_url = urllib.parse.urlunparse((
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                parsed.params,
+                new_query,
+                parsed.fragment,
+            ))
+            logging.info(f"Appended auth to tvg-logo: {new_url}")
+            return f'tvg-logo="{new_url}"'
+        else:
+            logging.info(f"No auth appended to tvg-logo: {url}")
+            return f'tvg-logo="{url}"'
     pattern = r'tvg-logo="([^"]+)"'
-    return re.sub(pattern, repl, m3u_text)
+    result = re.sub(pattern, repl, m3u_text)
+    logging.info("Completed tvg-logo auth append check")
+    return result
 
-# Add a manual refresh endpoint
-@app.route("/refresh")
-def refresh():
-    global cached_playlist, last_refresh_time
-    last_refresh_time = 0
-    playlist()
-    socketio.emit('playlist_updated')
-    socketio.emit('playlist_cache_refreshed')
-    logging.info("Playlist cache manually refreshed")
-    return redirect(url_for('index'))
-
-# Parse channels from M3U text
 def parse_m3u_channels(m3u_text):
+    logging.info("Parsing M3U channels")
     channels = []
     lines = m3u_text.splitlines()
     i = 0
     while i < len(lines):
         line = lines[i]
         if line.startswith("#EXTINF"):
-            # Extract attributes
             group_title = re.search(r'group-title="([^"]+)"', line)
             tvg_id = re.search(r'tvg-id="([^"]+)"', line)
             tvg_logo = re.search(r'tvg-logo="([^"]+)"', line)
             channel_number = re.search(r'tvg-chno="([^"]+)"', line)
-            # Channel name is after last comma
             channel_name = line.split(",", 1)[-1].strip()
-            # Next line should be the stream URL
             stream_url = lines[i+1] if i+1 < len(lines) else ""
-            # Extract channelid from stream_url
             channelid_match = re.search(r'/channelid/(\d+)', stream_url)
             channelid = channelid_match.group(1) if channelid_match else ""
             channels.append({
@@ -189,24 +202,38 @@ def parse_m3u_channels(m3u_text):
                 "channelid": channelid,
                 "stream_url": stream_url,
             })
+            logging.info(f"Parsed channel: {channel_name} (ID: {channelid})")
             i += 2
         else:
             i += 1
+    logging.info(f"Total channels parsed: {len(channels)}")
     return channels
 
-# Track server start time for restart detection
-SERVER_START_TIME = int(time.time())
+# Flask endpoints
 
 @app.route("/server_status")
 def server_status():
+    uptime = int(time.time()) - SERVER_START_TIME
+    logging.info(f"Server status requested: uptime={uptime}s, last_playlist_update={last_playlist_update}")
     return {
         "start_time": SERVER_START_TIME,
+        "uptime_seconds": uptime,
         "last_playlist_update": last_playlist_update
     }
 
-# Main index page showing download links and info
+@app.route("/refresh")
+def refresh():
+    threading.Thread(target=manual_refresh_playlist, daemon=True).start()
+    logging.info("Manual playlist refresh triggered")
+    return redirect(url_for('index'))
+
 @app.route("/")
 def index():
+    client_ip = request.remote_addr
+    user_agent = request.headers.get("User-Agent", "Unknown")
+    logging.info(f"Index page rendered for client {client_ip} ({user_agent})")
+
+    logging.info("Rendering main index page")
     if last_refresh_time:
         last_update_str = datetime.datetime.fromtimestamp(last_refresh_time).strftime("%Y-%m-%d %H:%M:%S")
     else:
@@ -214,11 +241,18 @@ def index():
 
     channel_rows = ""
     if cached_playlist:
+        logging.info("Parsing cached playlist for channel table")
         channels = parse_m3u_channels(cached_playlist)
         for ch in channels:
-            logo_html = f'<img src="{ch["tvg_logo"]}" alt="logo" style="height:32px;">' if ch["tvg_logo"] else ""
-            play_html = f'''
-            <button onclick="copyToClipboard('{ch["stream_url"]}')">Copy Link</button>
+            logo_html = ""
+            if ch["tvg_logo"]:
+                logo_html = f'<img src="{ch["tvg_logo"]}" alt="logo" style="height:32px;">'
+            else:
+                logging.info(f"No logo for channel: {ch['channel_name']}")
+            copy_html = f'''
+            <td style="text-align:center;">
+                <button onclick="copyToClipboard('{ch["stream_url"]}')">Copy Link</button>
+            </td>
             '''
             channel_rows += f"""
             <tr>
@@ -227,273 +261,185 @@ def index():
                 <td>{ch["channel_number"]}</td>
                 <td>{ch["tvg_id"]}</td>
                 <td>{ch.get("channelid", "")}</td>
-                <td>{logo_html}</td>
-                <td>{play_html}</td>
+                <td class="centered">{logo_html}</td>
+                {copy_html}
             </tr>
             """
+    else:
+        logging.info("No cached playlist available for channel table")
 
-    html = f"""
-    <html>
-    <head>
-        <title>TVHeadend Playlist Server</title>
-        <style>
-            body {{
-                background-color: #181818;
-                color: #e0e0e0;
-                font-family: Arial, sans-serif;
-                transition: background 0.3s, color 0.3s;
-            }}
-            table {{
-                background-color: #222;
-                color: #e0e0e0;
-                border-collapse: collapse;
-                width: 100%;
-            }}
-            th, td {{
-                border: 1px solid #444;
-                padding: 8px;
-                text-align: left;
-            }}
-            th {{
-                background-color: #333;
-            }}
-            tr:nth-child(even) {{
-                background-color: #202020;
-            }}
-            a, a:visited {{
-                color: #80bfff;
-            }}
-            button {{
-                background-color: #333;
-                color: #e0e0e0;
-                border: 1px solid #444;
-                padding: 8px 16px;
-                border-radius: 4px;
-                cursor: pointer;
-            }}
-            button:hover {{
-                background-color: #444;
-            }}
-            img {{
-                background: #222;
-                border-radius: 4px;
-            }}
-            /* Light mode styles */
-            body.light-mode {{
-                background-color: #f5f5f5;
-                color: #222;
-            }}
-            table.light-mode {{
-                background-color: #fff;
-                color: #222;
-            }}
-            th.light-mode, td.light-mode {{
-                border: 1px solid #ccc;
-            }}
-            th.light-mode {{
-                background-color: #eee;
-            }}
-            tr.light-mode {{
-                background-color: #fff !important;
-                color: #222 !important;
-            }}
-            tr.light-mode:nth-child(even) {{
-                background-color: #f0f0f0 !important;
-            }}
-            a.light-mode, a.light-mode:visited {{
-                color: #0066cc;
-            }}
-            button.light-mode {{
-                background-color: #eee;
-                color: #222;
-                border: 1px solid #ccc;
-            }}
-            button.light-mode:hover {{
-                background-color: #ddd;
-            }}
-            img.light-mode {{
-                background: #fff;
-            }}
-        </style>
-        <script src="//cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
-        <script>
-            var socket = io({{transports: ['websocket']}});
-            socket.on('playlist_updated', function() {{
-                location.reload();
-            }});
+    user_list_str = ", ".join([u["user"] for u in USERS])
 
-            // Add polling for server restart detection
-            let lastServerStart = null;
-            let lastPlaylistUpdate = null;
-            function checkServerRestart() {{
-                fetch('/server_status')
-                    .then(response => response.json())
-                    .then(data => {{
-                        if (lastServerStart === null) {{
-                            lastServerStart = data.start_time;
-                        }} else if (data.start_time !== lastServerStart) {{
-                            location.reload();
-                        }}
-                        if (lastPlaylistUpdate === null) {{
-                            lastPlaylistUpdate = data.last_playlist_update;
-                        }} else if (data.last_playlist_update !== lastPlaylistUpdate) {{
-                            location.reload();
-                        }}
-                    }})
-                    .catch(function(error) {{ /* error ignored */ }});
-            }}
-            setInterval(checkServerRestart, 5000);
+    return render_template(
+        "index.html",
+        TVH_HOST=TVH_HOST,
+        TVH_PORT=TVH_PORT,
+        user_list_str=user_list_str,
+        REFRESH_INTERVAL=REFRESH_INTERVAL,
+        last_update_str=last_update_str,
+        channel_rows=channel_rows
+    )
 
-            socket.on('playlist_cache_refreshed', function() {{
-                location.reload();
-            }});
-
-            function toggleMode() {{
-                document.body.classList.toggle('light-mode');
-                var tables = document.getElementsByTagName('table');
-                for (var i = 0; i < tables.length; i++) {{
-                    tables[i].classList.toggle('light-mode');
-                }}
-                var ths = document.getElementsByTagName('th');
-                for (var i = 0; i < ths.length; i++) {{
-                    ths[i].classList.toggle('light-mode');
-                }}
-                var tds = document.getElementsByTagName('td');
-                for (var i = 0; i < tds.length; i++) {{
-                    tds[i].classList.toggle('light-mode');
-                }}
-                var links = document.getElementsByTagName('a');
-                for (var i = 0; i < links.length; i++) {{
-                    links[i].classList.toggle('light-mode');
-                }}
-                var buttons = document.getElementsByTagName('button');
-                for (var i = 0; i < buttons.length; i++) {{
-                    buttons[i].classList.toggle('light-mode');
-                }}
-                var imgs = document.getElementsByTagName('img');
-                for (var i = 0; i < imgs.length; i++) {{
-                    imgs[i].classList.toggle('light-mode');
-                }}
-                var trs = document.getElementsByTagName('tr');
-                for (var i = 0; i < trs.length; i++) {{
-                    trs[i].classList.toggle('light-mode');
-                }}
-            }}
-
-            function copyToClipboard(url) {{
-                // Create a temporary textarea element
-                var tempInput = document.createElement("textarea");
-                tempInput.value = url;
-                document.body.appendChild(tempInput);
-                tempInput.select();
-                try {{
-                    document.execCommand("copy");
-                    alert("Stream URL copied! Paste it in VLC or your preferred player.");
-                }} catch (err) {{
-                    alert("Failed to copy. Please copy manually.");
-                }}
-                document.body.removeChild(tempInput);
-            }}
-        </script>
-    </head>
-    <body>
-        <h1>TVHeadend Playlist Server</h1>
-        <button onclick="toggleMode()">Toggle Dark/Light Mode</button>
-        <ul>
-            <li><a href="/playlist.m3u">Download M3U Playlist</a></li>
-            <li><a href="/epg.xml">Download EPG XML</a></li>
-        </ul>
-        <form action="/refresh" method="get">
-            <button type="submit">Refresh Channel List Now</button>
-        </form>
-        <p>Playlist refresh interval: {REFRESH_INTERVAL} seconds</p>
-        <p>Last playlist update: {last_update_str}</p>
-        <h2>Channels</h2>
-        <table>
-            <tr>
-                <th>Group Title</th>
-                <th>Channel Name</th>
-                <th>Channel Number</th>
-                <th>TVG-ID</th>
-                <th>Channel ID</th>
-                <th>TVG-Logo</th>
-                <th>Play</th>
-            </tr>
-            {channel_rows}
-        </table>
-    </body>
-    </html>
-    """
-    return html
-
-# Playlist endpoint that merges all user-visible channels
 @app.route("/playlist.m3u")
 def playlist():
+    global cached_playlist
+    if not cached_playlist:
+        return Response("#EXTM3U\n# Playlist is being generated, please try again in a moment.\n", mimetype="application/x-mpegurl")
+    return Response(cached_playlist, mimetype="application/x-mpegurl")
+
+@app.route("/epg.xml")
+def epg():
+    try:
+        if not TVH_EPG_AUTH:
+            raise Exception("TVH_EPG_AUTH is not set.")
+        epg_url = f"http://{TVH_HOST}:{TVH_PORT}/xmltv/channels?auth={TVH_EPG_AUTH}"
+        logging.info(f"Proxying full EPG from: {epg_url}")
+        resp = requests.get(epg_url)
+        resp.raise_for_status()
+        epg_text = resp.text
+        # Only replace if enabled
+        if EPG_STRIP_OFFSET:
+            logging.info("EPG_STRIP_OFFSET is enabled, replacing ' +0100\"' with '\"'")
+            epg_text = epg_text.replace(' +0100"', '"')
+        else:
+            logging.info("EPG_STRIP_OFFSET is not enabled, leaving EPG XML unchanged")
+        return Response(epg_text, mimetype="application/xml")
+    except Exception as e:
+        logging.error(f"Failed to fetch EPG XML: {e}")
+        return f"Failed to fetch EPG XML: {e}", 500
+
+def build_and_cache_playlist():
     global cached_playlist, last_refresh_time, last_playlist_update
+    # Build and cache once immediately at startup
+    logging.info("Initial build: Building and caching playlist")
     current_time = time.time()
-
-    # Serve cached playlist if it is still fresh
-    if cached_playlist and (current_time - last_refresh_time) < REFRESH_INTERVAL:
-        logging.info("Serving cached playlist")
-        return Response(cached_playlist, mimetype="application/x-mpegurl")
-
     combined_playlist = "#EXTM3U\n"
-    # Loop through each user and collect channels they can access
     for user in USERS:
         user_pass = user["pass"]
         try:
+            logging.info(f"Fetching tags for user: {user['user']}")
             tags = fetch_tags(user_pass)
         except Exception as e:
             logging.error(f"Failed to fetch tags for user {user['user']}: {e}")
             combined_playlist += f"# Failed to fetch tags for user {user['user']}: {e}\n"
             continue
 
-        # Fetch channels for each tag available to that user
         for tag in tags:
             tag_id = tag["tag_id"]
             tag_name = tag["name"]
             try:
+                logging.info(f"Fetching channels for tag {tag_id} ({tag_name}) for user {user['user']}")
                 m3u_text = fetch_channels_for_tag(tag_id, user_pass)
-                # Inject group-title and append auth token per user/tag
-                m3u_with_injections = inject_group_titles_and_auth(m3u_text, tag_name, user_pass)
-                combined_playlist += m3u_with_injections
+                m3u_with_injections = inject_group_titles(m3u_text, tag_name)
+                m3u_with_auth = inject_auth(m3u_with_injections, user_pass)
+                combined_playlist += m3u_with_auth
             except Exception as e:
                 logging.error(f"Failed to fetch tag {tag_id} for user {user['user']}: {e}")
                 combined_playlist += f"# Failed tag {tag_id} for user {user['user']}: {e}\n"
 
-    # Append auth to all tvg-logo URLs for all channels in the combined playlist
     if TVH_EPG_AUTH:
+        logging.info("Checking if icon auth should be appended")
         combined_playlist = append_auth_to_tvg_logo(combined_playlist, TVH_EPG_AUTH)
 
-    # Update cache
     cached_playlist = combined_playlist
     last_refresh_time = current_time
-    logging.info("Generated updated playlist")
-
-    # Now update timestamp and notify clients
     last_playlist_update = int(time.time())
+    logging.info("Initial build: Playlist cache updated")
+    channel_count = len(parse_m3u_channels(combined_playlist))
+    logging.info(f"Initial build: Saved {channel_count} channels to the playlist.")
     socketio.emit('playlist_cache_refreshed')
 
-    return Response(combined_playlist, mimetype="application/x-mpegurl")
+    # Now enter the regular refresh loop
+    while True:
+        time.sleep(REFRESH_INTERVAL)
+        logging.info("Auto-refresh: Building and caching playlist")
+        current_time = time.time()
+        combined_playlist = "#EXTM3U\n"
+        for user in USERS:
+            user_pass = user["pass"]
+            try:
+                logging.info(f"Fetching tags for user: {user['user']}")
+                tags = fetch_tags(user_pass)
+            except Exception as e:
+                logging.error(f"Failed to fetch tags for user {user['user']}: {e}")
+                combined_playlist += f"# Failed to fetch tags for user {user['user']}: {e}\n"
+                continue
 
-# EPG endpoint — proxies XMLTV from TVHeadend using the persistent EPG auth user
-@app.route("/epg.xml")
-def epg():
-    try:
-        if not TVH_EPG_AUTH:
-            raise Exception("TVH_EPG_AUTH is not set.")
+            for tag in tags:
+                tag_id = tag["tag_id"]
+                tag_name = tag["name"]
+                try:
+                    logging.info(f"Fetching channels for tag {tag_id} ({tag_name}) for user {user['user']}")
+                    m3u_text = fetch_channels_for_tag(tag_id, user_pass)
+                    m3u_with_injections = inject_group_titles(m3u_text, tag_name)
+                    m3u_with_auth = inject_auth(m3u_with_injections, user_pass)
+                    combined_playlist += m3u_with_auth
+                except Exception as e:
+                    logging.error(f"Failed to fetch tag {tag_id} for user {user['user']}: {e}")
+                    combined_playlist += f"# Failed tag {tag_id} for user {user['user']}: {e}\n"
 
-        # Append the persistent password to get the full EPG
-        epg_url = f"http://{TVH_HOST}:{TVH_PORT}/xmltv/channels?auth={TVH_EPG_AUTH}"
-        logging.info(f"Proxying full EPG from: {epg_url}")
-        resp = requests.get(epg_url)
-        resp.raise_for_status()
-        return Response(resp.content, mimetype="application/xml")
-    except Exception as e:
-        logging.error(f"Failed to fetch EPG XML: {e}")
-        return f"Failed to fetch EPG XML: {e}", 500
+        if TVH_EPG_AUTH:
+            logging.info("Checking if icon auth should be appended")
+            combined_playlist = append_auth_to_tvg_logo(combined_playlist, TVH_EPG_AUTH)
 
-# Entry point for the Flask server
+        cached_playlist = combined_playlist
+        last_refresh_time = current_time
+        last_playlist_update = int(time.time())
+        logging.info("Auto-refresh: Playlist cache updated")
+        channel_count = len(parse_m3u_channels(combined_playlist))
+        logging.info(f"Auto-refresh: Saved {channel_count} channels to the playlist.")
+        socketio.emit('playlist_cache_refreshed')
+
+def manual_refresh_playlist():
+    global cached_playlist, last_refresh_time, last_playlist_update
+    logging.info("Manual refresh: Building and caching playlist")
+    current_time = time.time()
+    combined_playlist = "#EXTM3U\n"
+    for user in USERS:
+        user_pass = user["pass"]
+        try:
+            logging.info(f"Fetching tags for user: {user['user']}")
+            tags = fetch_tags(user_pass)
+        except Exception as e:
+            logging.error(f"Failed to fetch tags for user {user['user']}: {e}")
+            combined_playlist += f"# Failed to fetch tags for user {user['user']}: {e}\n"
+            continue
+
+        for tag in tags:
+            tag_id = tag["tag_id"]
+            tag_name = tag["name"]
+            try:
+                logging.info(f"Fetching channels for tag {tag_id} ({tag_name}) for user {user['user']}")
+                m3u_text = fetch_channels_for_tag(tag_id, user_pass)
+                m3u_with_injections = inject_group_titles(m3u_text, tag_name)
+                m3u_with_auth = inject_auth(m3u_with_injections, user_pass)
+                combined_playlist += m3u_with_auth
+            except Exception as e:
+                logging.error(f"Failed to fetch tag {tag_id} for user {user['user']}: {e}")
+                combined_playlist += f"# Failed tag {tag_id} for user {user['user']}: {e}\n"
+
+    if TVH_EPG_AUTH:
+        logging.info("Checking if icon auth should be appended")
+        combined_playlist = append_auth_to_tvg_logo(combined_playlist, TVH_EPG_AUTH)
+
+    cached_playlist = combined_playlist
+    last_refresh_time = current_time
+    last_playlist_update = int(time.time())
+    logging.info("Manual refresh: Playlist cache updated")
+    channel_count = len(parse_m3u_channels(combined_playlist))
+    logging.info(f"Manual refresh: Saved {channel_count} channels to the playlist.")
+    socketio.emit('playlist_cache_refreshed')
+
+# Start the background thread after app and globals are set up
+threading.Thread(target=build_and_cache_playlist, daemon=True).start()
+
 if __name__ == "__main__":
-    logging.info(f"Starting TVHeadend Playlist Server on port {SERVER_PORT}")
-    socketio.run(app, host="0.0.0.0", port=SERVER_PORT)
+    logging.info("Starting TVHeadend Playlist Server")
+    logging.info(f"TVH_HOST: {TVH_HOST}")
+    logging.info(f"TVH_PORT: {TVH_PORT}")
+    logging.info(f"REFRESH_INTERVAL: {REFRESH_INTERVAL}")
+    logging.info(f"TVH_USERS: {USER_CREDENTIALS}")
+    logging.info(f"TVH_EPG_AUTH: {TVH_EPG_AUTH}")
+    logging.info(f"TVH_APPEND_ICON_AUTH: {TVH_APPEND_ICON_AUTH}")
+    logging.info("Web server is ready. Open http://localhost:9985/ in your browser.")
+    socketio.run(app, host="0.0.0.0", port=9985)
